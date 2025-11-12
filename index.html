@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>ESP32 → Flespi → Web</title>
+  <link rel="stylesheet" href="styles.css">
+  <!-- MQTT over WebSocket -->
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+</head>
+<body>
+  <main class="container">
+    <header class="head">
+      <h1>ESP32 → Flespi → Web</h1>
+      <div id="status" class="badge warn">Conectando…</div>
+    </header>
+
+    <section class="meta">
+      <div><b>Topic:</b> <code id="topicLbl"></code></div>
+      <div><b>Mensajes:</b> <span id="count">0</span></div>
+      <div><b>Último:</b> <span id="ago">esperando…</span></div>
+    </section>
+
+    <section class="card">
+      <h2>Campos (automático)</h2>
+      <div id="kv" class="kv">Esperando…</div>
+    </section>
+
+    <section class="card">
+      <h2>Payload crudo</h2>
+      <pre id="raw" class="pre">Esperando datos…</pre>
+      <small>Publica con <b>retain</b> desde MQTT Board y aparecerá al cargar.</small>
+    </section>
+  </main>
+
+<script>
+/* ------------ CONFIG ------------ */
+const TOPIC  = "esp32/test";  // Debe coincidir con el Publisher
+const TOKEN  = "i50Eau4vnoOspZZK5PyvsLFAdDgbUEZ8q5xq9QB8hcVR7apoR7zwTR6ajxbIUitg".trim();
+/* -------------------------------- */
+
+const $ = id => document.getElementById(id);
+$("topicLbl").textContent = TOPIC;
+
+const setBadge = (cls, text) => {
+  const el = $("status");
+  el.className = "badge " + cls;
+  el.textContent = text;
+};
+
+let last = null, n = 0;
+setInterval(() => {
+  if (!last) { $("ago").textContent = "esperando…"; return; }
+  const s = Math.floor((Date.now() - last) / 1000);
+  $("ago").textContent = `hace ${s}s`;
+}, 1000);
+
+// Conexión MQTT
+const client = mqtt.connect("wss://mqtt.flespi.io/mqtt", {
+  clientId: "web-" + Math.random().toString(16).slice(2),
+  username: "FlespiToken",
+  password: TOKEN,        // <- credencial
+  clean: true,
+  reconnectPeriod: 2000
+});
+
+client.on("connect", () => {
+  setBadge("ok", "Conexión exitosa");
+  client.subscribe(TOPIC, (err) => {
+    if (err) setBadge("err", "Error suscribiendo: " + err.message);
+  });
+});
+client.on("reconnect", () => setBadge("warn", "Reconectando…"));
+client.on("close",     () => setBadge("err", "Desconectado"));
+client.on("error",     (e) => setBadge("err", "Conexión errónea: " + (e?.message || e)));
+
+// Render tabla de todos los campos
+function renderKV(obj) {
+  const cont = $("kv");
+  cont.innerHTML = "";
+  const keys = Object.keys(obj);
+  if (!keys.length) { cont.textContent = "(sin campos)"; return; }
+  const tbl = document.createElement("table");
+  tbl.className = "table";
+  const thead = document.createElement("thead");
+  thead.innerHTML = "<tr><th>Campo</th><th>Valor</th></tr>";
+  tbl.appendChild(thead);
+
+  const tb = document.createElement("tbody");
+  keys.sort().forEach(k => {
+    let v = obj[k];
+    if (typeof v === "object" && v !== null) v = JSON.stringify(v);
+    if (v === "" || v === null || v === undefined) v = "—";
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${k}</td><td>${String(v)}</td>`;
+    tb.appendChild(tr);
+  });
+  tbl.appendChild(tb);
+  cont.appendChild(tbl);
+}
+
+// Mensajes
+client.on("message", (_topic, payload) => {
+  n++; $("count").textContent = String(n);
+  last = Date.now();
+  const txt = payload.toString();
+  $("raw").textContent = txt;
+  try {
+    const data = JSON.parse(txt);
+    renderKV(data);
+    $("raw").textContent = JSON.stringify(data, null, 2);
+  } catch {
+    $("kv").textContent = "(payload no es JSON)";
+  }
+});
+</script>
+</body>
+</html>
